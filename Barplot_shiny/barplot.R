@@ -40,7 +40,7 @@ ui <- dashboardPage(
                                 )
                             ))), 
     
-    # 侧边栏 ---------------------------------------------------------------------
+# 侧边栏 ---------------------------------------------------------------------
     
     dashboardSidebar(
         width = 300,
@@ -118,14 +118,14 @@ ui <- dashboardPage(
         )
     ),
     
-    # 主体 ----------------------------------------------------------------------
+# 主体 ----------------------------------------------------------------------
     
     dashboardBody(
         
         useShinyjs(),
         extendShinyjs(text = jscode, functions = c("closeWindow")),
         
-        # CSS修改一些细节，实在不知道怎么修改更好了 --------------------------------------------------
+# CSS修改一些细节，实在不知道怎么修改更好了 --------------------------------------------------
         
         tags$head(type = "text/css", tags$style(HTML(".main-sidebar li a span {color: white;font-size: 20px;}"))),
         tags$style(type = "text/css", 
@@ -218,25 +218,20 @@ ui <- dashboardPage(
         ))
 )
 
+
+
 # server ------------------------------------------------------------------
 server <- function(input, output,session) {
+
     
-    df <- iris %>%
-        gather(.,
-               key,
-               value,
-               -Species) %>%
-        rename("group" = Species)
-    
-    
-    # 更新参数 --------------------------------------------------------------------
+# 更新参数 --------------------------------------------------------------------
     observeEvent(input$import_data, {
         dta <- read_csv(input$import_data$datapath)
         updateSelectInput(session, "name", label = "Select", choices = colnames(dta))
         updateSliderInput(session, "y_limit",label = "Y limits", 0, max(dta %>% select(where(is.numeric))),.5, value = 0)
     })
     
-    # 读取文件 --------------------------------------------------------------------
+# 读取文件 --------------------------------------------------------------------
     
     
     data <- reactive({
@@ -259,14 +254,22 @@ server <- function(input, output,session) {
         
         data$group <- as.factor(data$group) #以防万一
         data$key <- as.factor(data$key) #以防万一 again
+        data$value <- as.numeric(data$value)
         data <- data %>%
             drop_na(value) #以防万一 again and again
     })
     
-    # 画表格 ----------------------------------------------------------------------
+#画表格 ----------------------------------------------------------------------
     output$table <- DT::renderDataTable({
-        if(is.null(data())){dta_table <- df} #不忍直视了
-        dta_table <- data()
+        if (is.null(data())) {
+            dta_table <- iris %>%
+                gather(.,
+                       key,
+                       value,
+                       -Species) %>%
+                rename("group" = Species)
+        } #不忍直视了
+    dta_table <- data()
         dta_table <- dta_table %>% #过于好用，不需要解释了。
             group_by(group, key) %>% #这参数快被淘汰了，下次可能用across写了
             summarise_each(funs(mean,
@@ -274,32 +277,49 @@ server <- function(input, output,session) {
         dta_table
     })
     
-    # 最主要的图 -------------------------------------------------------------------
-    
-    # 数据预处理 -------------------------------------------------------------------
+# 最主要的图 -------------------------------------------------------------------
     
     plotInput <- reactive({
-        if(is.null(data())) {dta_barplot <- df} #又不是不能用
+        if(is.null(data())) {dta_barplot <- iris %>%
+            gather(.,
+                   key,
+                   value,
+                   -Species) %>%
+            rename("group" = Species)} #又不是不能用
         
         dta_barplot <- data() #真正的读入数据
-        if (data() %>% distinct(key) %>% nrow() > 1) {
-            anova <- aov(value ~ group + key, dta_barplot) #ANOVA
-            posthoc.test <-
-                LSD.test(anova, c('group', 'key'), p.adj = 'bonferroni') #Post hoc
-            posthoc.test <-
-                posthoc.test$groups %>%
-                mutate(name = row.names(.)) %>%
-                separate(name, into = c("group", "key"), sep = ":") #合并结果
-        } else if (data() %>% distinct(group) %>% nrow() > 2) {
-            anova <- aov(value ~ group, dta_barplot) #ANOVA
-            posthoc.test <-
-                LSD.test(anova, c('group'), p.adj = 'bonferroni')
-            posthoc.test <-
-                posthoc.test$groups %>%
-                mutate(group = row.names(.),
-                       key = data() %>% distinct(key) %>% .$key)#合并结果
-        }
-        
+            if (dta_barplot %>% distinct(group) %>% nrow() > 2) {
+                
+                key_name <- dta_barplot %>% distinct(key) %>% .$key
+                posthoc <- data.frame(
+                    value = double(),
+                    groups = character(),
+                    key = character(),
+                    group = character(),
+                    stringsAsFactors = FALSE
+                )
+
+                for (i in 1:length(key_name)) {
+                    anova <- dta_barplot %>%
+                        filter(key == key_name[i]) %>%
+                        aov(value ~ group, .)
+                    posthoc.test <- anova %>%
+                        LSD.test(., "group", p.adj = 'bonferroni')
+                    posthoc <- posthoc.test$groups %>%
+                        mutate(key = key_name[i],
+                               group = rownames(.)) %>%
+                        bind_rows(., posthoc)
+                } #合并结果
+            } else if (dta_barplot %>% distinct(key) %>% nrow() > 2) {
+                anova <- aov(value ~ group + key, dta_barplot) #ANOVA
+                posthoc.test <-
+                    LSD.test(anova, c('group', 'key'), p.adj = 'bonferroni') 
+
+                posthoc <-
+                    posthoc.test$groups %>%
+                    mutate(name = row.names(.)) %>%
+                    separate(name, into = c("group", "key"), sep = ":") #合并结果
+            }
         
         #set theme
         switch(
@@ -333,7 +353,7 @@ server <- function(input, output,session) {
             input$label_angle == 90 ~ c(1,.5)
         )
         
-        # 开始画图 --------------------------------------------------------------------
+# 开始画图 --------------------------------------------------------------------
         
         if (input$position == "stack") {
             # stacked bars
@@ -343,7 +363,7 @@ server <- function(input, output,session) {
                                     sd)) %>% #计算均值，标准差
                 group_by(group) %>% #分组
                 mutate(SDPos = cumsum(rev(mean))) %>% #精髓的reverse + cumsum
-                left_join(., posthoc.test, by = c("group","key")) %>% 
+                left_join(., posthoc, by = c("group","key")) %>% 
                 ggplot(aes(x = group, y = mean, fill = key)) + #做图
                 geom_bar(
                     color = input$line_color,
@@ -449,7 +469,7 @@ server <- function(input, output,session) {
                     p +
                         facet_wrap(
                             ~ key,
-                            scales = input$facet_scale,
+                            scales = "fixed",
                             nrow = 1)
                 }
             } else {
@@ -458,8 +478,8 @@ server <- function(input, output,session) {
                     group_by(group, key) %>%
                     summarise_each(funs(mean,
                                         sd)) %>%
-                    left_join(., posthoc.test, by = c("group","key")) %>% #懒得注释了，连字母都是从前面扒的
-                    ggplot(aes_string(x = "group", y = "mean", fill = input$bar_fill)) +
+                    left_join(., posthoc, by = c("group","key")) %>% #懒得注释了，连字母都是从前面扒的
+                    ggplot(aes_string(x = "group", y = "mean", group = "key", fill = input$bar_fill)) +
                     geom_bar(
                         stat = "identity",
                         position = position_dodge(input$bar_gap),
@@ -495,25 +515,39 @@ server <- function(input, output,session) {
                         legend.position = input$legend_position
                     ) 
                 
-                if(input$facet_warp == "Yes") {p + 
-                        facet_wrap( ~ key, scales = input$facet_scale, 
-                                    nrow = as.integer(input$facet_row),
-                                    ncol = as.integer(input$facet_col))} else {p}
+                if (input$facet_warp == "Yes") {
+                    p +
+                        facet_wrap(~ key,
+                                   scales = input$facet_scale, 
+                                   nrow = as.integer(input$facet_row),
+                                   ncol = as.integer(input$facet_col))
+                }
+                else {p}
             }
         }
     })
-    output$barplot <- renderPlot({ #没这个就看不到图了
+    output$barplot <- renderPlot({
+        #没这个就看不到图了
         print(plotInput())
-        ggsave("plot.pdf",
-               plotInput(),
-               width = input$fig.width/72,
-               height = input$fig.length/72)
-        ggsave("plot.jpg",
-               plotInput(),
-               width = input$fig.width/72,
-               height = input$fig.length/72, dpi = 300)
-    }, width = function() {input$fig.width}, 
-    height = function() {input$fig.length}) #其实可以等用户点了再生成图片的，直接先偷偷生成两个吧
+        ggsave(
+            "plot.pdf",
+            plotInput(),
+            width = input$fig.width / 72,
+            height = input$fig.length / 72
+        )
+        ggsave(
+            "plot.jpg",
+            plotInput(),
+            width = input$fig.width / 72,
+            height = input$fig.length / 72,
+            dpi = 300
+        )
+    }, width = function() {
+        input$fig.width
+    },
+    height = function() {
+        input$fig.length
+    }) #其实可以等用户点了再生成图片的，直接先偷偷生成两个吧
     # 另一个柱状图 ------------------------------------------------------------------
     output$barplot_total <- renderPlot({
         if(is.null(data())){dta_total <- df} #丈育环节
@@ -614,6 +648,9 @@ server <- function(input, output,session) {
     ## colose window
     observeEvent(input$close, {
         js$closeWindow()
+        stopApp()
+    })
+    session$onSessionEnded(function() {
         stopApp()
     })
 }
